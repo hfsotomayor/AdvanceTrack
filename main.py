@@ -5,6 +5,8 @@ import geopy.distance
 from geopy.geocoders import Nominatim
 import unidecode
 import time
+import shutil
+from datetime import datetime
 
 def obtener_datos_gpx(archivo_gpx):
     # Abre y parsea el archivo GPX
@@ -60,7 +62,6 @@ def obtener_datos_gpx(archivo_gpx):
 
     return origen, destino, distancia_total
 
-
 def obtener_nombre_lugar(coordenadas, reintentos=3, timeout=10):
     # Inicializa el geolocalizador con un agente de usuario
     geolocalizador = Nominatim(user_agent="geo_names_app")
@@ -98,58 +99,62 @@ def obtener_nombre_lugar(coordenadas, reintentos=3, timeout=10):
     
     raise Exception(f"No se pudo obtener el nombre del lugar para las coordenadas {coordenadas} después de {reintentos} intentos.")
 
-
 def limpiar_nombre(nombre):
     # Normaliza el nombre, elimina acentos y espacios
     nombre_limpio = unidecode.unidecode(nombre).strip().replace(" ", "")
     return nombre_limpio
 
 def cambiar_nombre_archivos(ruta_directorio):
-    archivos = os.listdir(ruta_directorio)
+    # Obtiene el directorio padre del directorio objetivo
+    directorio_padre = os.path.dirname(ruta_directorio)
+    # Crea una carpeta nueva con la fecha y hora actual en el nombre
+    fecha_hora_actual = datetime.now().strftime('%Y-%m-%d_%H-%M')
+    nueva_carpeta = os.path.join(directorio_padre, f"{fecha_hora_actual}-ResultadosAdvanceTrack")
+    os.makedirs(nueva_carpeta, exist_ok=True)
     
-    for archivo in archivos:
-        if archivo.endswith('.gpx'):
-            # Intenta obtener los datos de origen y destino del archivo GPX
-            try:
-                origen, destino, distancia = obtener_datos_gpx(os.path.join(ruta_directorio, archivo))
-            except Exception as e:
-                print(f"Error al procesar {archivo}: {e}")
-                continue
-            
-            try:
-                nombre_origen = obtener_nombre_lugar((origen['Latitud'], origen['Longitud']))
-                nombre_destino = obtener_nombre_lugar((destino['Latitud'], destino['Longitud']))
-            except Exception as e:
-                print(f"Error al obtener nombres de lugar para {archivo}: {e}")
-                continue
-            
-            nombre_pais_origen = nombre_origen['Pais']
-            nombre_pais_destino = nombre_destino['Pais']
-            
-            # Redondea la distancia y la convierte en un string con unidades apropiadas
-            if distancia >= 1000:
-                distancia_str = f"{round(distancia / 1000)}Km"
-            else:
-                distancia_str = f"{round(distancia)}Ms"
-            
-            # Genera el nuevo nombre para el archivo
-            nuevo_nombre = f"{origen['Fecha-Hora']}_{distancia_str}_ORIG_{nombre_pais_origen}-{limpiar_nombre(nombre_origen['Provincia'])}-{limpiar_nombre(nombre_origen['Ciudad'])}"
-            if nombre_destino != nombre_origen:
-                if nombre_pais_destino != '':
-                    nuevo_nombre += f"_DEST_{nombre_pais_destino}-{limpiar_nombre(nombre_destino['Provincia'])}-{limpiar_nombre(nombre_destino['Ciudad'])}"
-            
-            # Agrega el nombre del creador al nuevo nombre del archivo
-            nuevo_nombre += f"_{limpiar_nombre(origen['Creador'])}"
-            
-            nuevo_nombre += ".gpx"
-            
-            # Verifica si el nuevo nombre ya existe
-            ruta_nuevo_nombre = os.path.join(ruta_directorio, nuevo_nombre)
-            if not os.path.exists(ruta_nuevo_nombre):
-                os.rename(os.path.join(ruta_directorio, archivo), ruta_nuevo_nombre)
-                print(f"Archivo renombrado: {archivo} -> {nuevo_nombre}")
-            else:
-                print(f"El archivo {nuevo_nombre} ya existe. No se puede renombrar {archivo}.")
+    # Recorre recursivamente todos los archivos y subdirectorios en el directorio objetivo
+    for root, dirs, files in os.walk(ruta_directorio):
+        for archivo in files:
+            if archivo.endswith('.gpx'):
+                ruta_archivo = os.path.join(root, archivo)
+                # Intenta obtener los datos de origen y destino del archivo GPX
+                try:
+                    origen, destino, distancia = obtener_datos_gpx(ruta_archivo)
+                except Exception as e:
+                    print(f"Error al procesar {archivo}: {e}")
+                    continue
+                
+                try:
+                    nombre_origen = obtener_nombre_lugar((origen['Latitud'], origen['Longitud']))
+                    nombre_destino = obtener_nombre_lugar((destino['Latitud'], destino['Longitud']))
+                except Exception as e:
+                    print(f"Error al obtener nombres de lugar para {archivo}: {e}")
+                    continue
+                
+                nombre_pais_origen = nombre_origen['Pais']
+                nombre_pais_destino = nombre_destino['Pais']
+                
+                # Redondea la distancia y la convierte en un string con unidades apropiadas
+                if distancia >= 1000:
+                    distancia_str = f"{round(distancia / 1000)}Km"
+                else:
+                    distancia_str = f"{round(distancia)}Ms"
+                
+                # Genera el nuevo nombre para el archivo
+                nuevo_nombre = f"{origen['Fecha-Hora']}_{distancia_str}_ORIG_{nombre_pais_origen}-{limpiar_nombre(nombre_origen['Provincia'])}-{limpiar_nombre(nombre_origen['Ciudad'])}"
+                if nombre_destino != nombre_origen:
+                    if nombre_pais_destino != '':
+                        nuevo_nombre += f"_DEST_{nombre_pais_destino}-{limpiar_nombre(nombre_destino['Provincia'])}-{limpiar_nombre(nombre_destino['Ciudad'])}"
+                
+                # Agrega el nombre del creador al nuevo nombre del archivo
+                nuevo_nombre += f"_{limpiar_nombre(origen['Creador'])}"
+                
+                nuevo_nombre += ".gpx"
+                
+                # Copia el archivo a la nueva carpeta con el nuevo nombre
+                ruta_nuevo_nombre = os.path.join(nueva_carpeta, nuevo_nombre)
+                shutil.copy(ruta_archivo, ruta_nuevo_nombre)
+                print(f"Archivo copiado: {archivo} -> {nuevo_nombre}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Cambiar nombres de archivos GPX.')
