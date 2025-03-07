@@ -7,6 +7,7 @@ import unidecode
 import time
 import shutil
 from datetime import datetime
+import xml.etree.ElementTree as ET  # Para manejar archivos .tcx
 
 def obtener_datos_gpx(archivo_gpx):
     # Abre y parsea el archivo GPX
@@ -62,6 +63,57 @@ def obtener_datos_gpx(archivo_gpx):
 
     return origen, destino, distancia_total
 
+def obtener_datos_tcx(archivo_tcx):
+    # Abre y parsea el archivo TCX
+    tree = ET.parse(archivo_tcx)
+    root = tree.getroot()
+    
+    ns = {'tcx': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
+    # Encuentra todos los puntos del track
+    trackpoints = root.findall('.//tcx:Trackpoint', ns)
+    
+    if not trackpoints:
+        raise ValueError("El archivo TCX no contiene puntos válidos")
+    
+    # Extrae el primer punto del track
+    punto_origen = trackpoints[0]
+    lat_origen = float(punto_origen.find('tcx:Position/tcx:LatitudeDegrees', ns).text)
+    lon_origen = float(punto_origen.find('tcx:Position/tcx:LongitudeDegrees', ns).text)
+    ele_origen = float(punto_origen.find('tcx:AltitudeMeters', ns).text)
+    tiempo_origen = punto_origen.find('tcx:Time', ns).text
+    fecha_hora_origen = datetime.strptime(tiempo_origen, '%Y-%m-%dT%H:%M:%SZ').strftime('%Y-%m-%d_%H-%M')
+    
+    origen = {
+        'Fecha-Hora': fecha_hora_origen,
+        'Latitud': lat_origen,
+        'Longitud': lon_origen,
+        'Elevacion': ele_origen,
+        'Creador': root.find('.//tcx:Author/tcx:Name', ns).text if root.find('.//tcx:Author/tcx:Name', ns) is not None else 'Desconocido'
+    }
+    
+    # Extrae el último punto del track
+    punto_destino = trackpoints[-1]
+    lat_destino = float(punto_destino.find('tcx:Position/tcx:LatitudeDegrees', ns).text)
+    lon_destino = float(punto_destino.find('tcx:Position/tcx:LongitudeDegrees', ns).text)
+    ele_destino = float(punto_destino.find('tcx:AltitudeMeters', ns).text)
+    
+    destino = {
+        'Latitud': lat_destino,
+        'Longitud': lon_destino,
+        'Elevacion': ele_destino
+    }
+    
+    # Calcula la distancia total considerando todos los puntos intermedios del track
+    distancia_total = 0
+    for i in range(1, len(trackpoints)):
+        punto_anterior = trackpoints[i-1]
+        punto_actual = trackpoints[i]
+        coords_anteriores = (float(punto_anterior.find('tcx:Position/tcx:LatitudeDegrees', ns).text), float(punto_anterior.find('tcx:Position/tcx:LongitudeDegrees', ns).text))
+        coords_actuales = (float(punto_actual.find('tcx:Position/tcx:LatitudeDegrees', ns).text), float(punto_actual.find('tcx:Position/tcx:LongitudeDegrees', ns).text))
+        distancia_total += geopy.distance.distance(coords_anteriores, coords_actuales).meters
+    
+    return origen, destino, distancia_total
+
 def obtener_nombre_lugar(coordenadas, reintentos=3, timeout=10):
     # Inicializa el geolocalizador con un agente de usuario
     geolocalizador = Nominatim(user_agent="geo_names_app")
@@ -115,51 +167,14 @@ def cambiar_nombre_archivos(ruta_directorio):
     # Recorre recursivamente todos los archivos y subdirectorios en el directorio objetivo
     for root, dirs, files in os.walk(ruta_directorio):
         for archivo in files:
-            if archivo.endswith('.gpx'):
+            if archivo.endswith('.gpx') or archivo.endswith('.tcx'):
                 ruta_archivo = os.path.join(root, archivo)
-                # Intenta obtener los datos de origen y destino del archivo GPX
+                # Intenta obtener los datos de origen y destino del archivo GPX o TCX
                 try:
-                    origen, destino, distancia = obtener_datos_gpx(ruta_archivo)
+                    if archivo.endswith('.gpx'):
+                        origen, destino, distancia = obtener_datos_gpx(ruta_archivo)
+                    else:
+                        origen, destino, distancia = obtener_datos_tcx(ruta_archivo)
                 except Exception as e:
                     print(f"Error al procesar {archivo}: {e}")
-                    continue
-                
-                try:
-                    nombre_origen = obtener_nombre_lugar((origen['Latitud'], origen['Longitud']))
-                    nombre_destino = obtener_nombre_lugar((destino['Latitud'], destino['Longitud']))
-                except Exception as e:
-                    print(f"Error al obtener nombres de lugar para {archivo}: {e}")
-                    continue
-                
-                nombre_pais_origen = nombre_origen['Pais']
-                nombre_pais_destino = nombre_destino['Pais']
-                
-                # Redondea la distancia y la convierte en un string con unidades apropiadas
-                if distancia >= 1000:
-                    distancia_str = f"{round(distancia / 1000)}Km"
-                else:
-                    distancia_str = f"{round(distancia)}Ms"
-                
-                # Genera el nuevo nombre para el archivo
-                nuevo_nombre = f"{origen['Fecha-Hora']}_{distancia_str}_ORIG_{nombre_pais_origen}-{limpiar_nombre(nombre_origen['Provincia'])}-{limpiar_nombre(nombre_origen['Ciudad'])}"
-                if nombre_destino != nombre_origen:
-                    if nombre_pais_destino != '':
-                        nuevo_nombre += f"_DEST_{nombre_pais_destino}-{limpiar_nombre(nombre_destino['Provincia'])}-{limpiar_nombre(nombre_destino['Ciudad'])}"
-                
-                # Agrega el nombre del creador al nuevo nombre del archivo
-                nuevo_nombre += f"_{limpiar_nombre(origen['Creador'])}"
-                
-                nuevo_nombre += ".gpx"
-                
-                # Copia el archivo a la nueva carpeta con el nuevo nombre
-                ruta_nuevo_nombre = os.path.join(nueva_carpeta, nuevo_nombre)
-                shutil.copy(ruta_archivo, ruta_nuevo_nombre)
-                print(f"Archivo copiado: {archivo} -> {nuevo_nombre}")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Cambiar nombres de archivos GPX.')
-    parser.add_argument('directorio', type=str, help='Ruta del directorio que contiene los archivos GPX')
-
-    args = parser.parse_args()
-
-    cambiar_nombre_archivos(args.directorio)
+                   
